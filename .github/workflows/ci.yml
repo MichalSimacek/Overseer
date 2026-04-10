@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: dotnet build backend/Overseer.Api/Overseer.Api.csproj
+      - run: npm install
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
