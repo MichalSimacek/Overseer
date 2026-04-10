@@ -163,7 +163,7 @@ api.MapPost("/servers", async (HttpContext httpContext, CreateServerNodeRequest 
     var tenantId = httpContext.GetTenantId();
     var tenant = await dbContext.Tenants.FirstAsync(x => x.Id == tenantId, cancellationToken);
     var currentServers = await dbContext.ServerNodes.CountAsync(x => x.TenantId == tenantId, cancellationToken);
-    var limit = GetServerLimit(tenant);
+    var limit = ServerLimitHelper.GetServerLimit(tenant);
     if (currentServers >= limit)
     {
         return Results.BadRequest(new { error = $"Server limit reached for current plan ({limit})." });
@@ -532,17 +532,20 @@ internal static class HttpContextExtensions
     }
 }
 
-static int GetServerLimit(Tenant tenant)
+internal static class ServerLimitHelper
 {
-    if (tenant.ServerLimitOverride > 0)
+    public static int GetServerLimit(Tenant tenant)
     {
-        return tenant.ServerLimitOverride;
-    }
+        if (tenant.ServerLimitOverride > 0)
+        {
+            return tenant.ServerLimitOverride;
+        }
 
-    return tenant.PlanType switch
-    {
-        PlanType.Trial => 5,
-        PlanType.Subscription => 20,
-        _ => int.MaxValue
-    };
+        return tenant.PlanType switch
+        {
+            PlanType.Trial => 5,
+            PlanType.Subscription => 20,
+            _ => int.MaxValue
+        };
+    }
 }
