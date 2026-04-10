@@ -1,0 +1,128 @@
+:root {
+  font-family: Inter, system-ui, sans-serif;
+  color: #e6ebff;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(81, 99, 255, 0.2), transparent 40%),
+    radial-gradient(circle at 90% 0%, rgba(32, 189, 255, 0.16), transparent 35%),
+    #070b1d;
+}
+
+body {
+  margin: 0;
+}
+
+.layout {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+.surface {
+  border: 1px solid #2a3467;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(16, 24, 58, 0.95), rgba(11, 17, 43, 0.95));
+  box-shadow: 0 20px 40px rgba(2, 4, 15, 0.45);
+}
+
+.hero {
+  padding: 1.5rem;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #97a7f5;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+}
+
+.hero h1 {
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+  margin: 0.6rem 0 0.5rem;
+}
+
+.hero p { color: #b6c0eb; }
+
+.cards,
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0 2rem;
+}
+
+.card,
+.pricing-card {
+  border: 1px solid #2f3d77;
+  border-radius: 14px;
+  padding: 1rem;
+  background: linear-gradient(180deg, #10183a, #0c1330);
+}
+
+.card p {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0.45rem 0 0;
+}
+
+.actions {
+  margin: 0.5rem 0 2rem;
+  padding: 1rem;
+}
+
+.actions h2,
+.actions h3 {
+  margin: 0 0 0.4rem;
+}
+
+.actions p {
+  margin-top: 0;
+  color: #aeb8e2;
+}
+
+.inline-form {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+input {
+  min-width: 220px;
+  flex: 1 1 260px;
+  border: 1px solid #31408a;
+  border-radius: 10px;
+  background: #0a1230;
+  color: #e6ebff;
+  padding: 0.65rem 0.7rem;
+}
+
+.price { font-size: 2rem; margin: 0.6rem 0; }
+.price span { font-size: 1rem; color: #aab2d6; }
+
+button {
+  background: linear-gradient(180deg, #5f6fff, #4958df);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  padding: 0.6rem 0.9rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:hover {
+  filter: brightness(1.06);
+}
+
+button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.error { color: #ff8f8f; }
+.message { color: #93f5be; }
+.nice-to-have ul { color: #cfd6ff; }
+
+@media (max-width: 680px) {
+  .layout {
+    padding: 1.2rem 0.8rem 2rem;
+  }
+}
