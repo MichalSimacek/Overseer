@@ -23,6 +23,7 @@ public sealed class Tenant
     public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
     public DateTime? TrialEndsAtUtc { get; set; } = DateTime.UtcNow.AddDays(14);
     public bool IsActive { get; set; } = true;
+    public int ServerLimitOverride { get; set; }
 }
 
 public sealed class ServerNode
@@ -87,6 +88,36 @@ public sealed class SubscriptionOrder
     public required string PaymentProvider { get; set; }
     public required string ProviderReference { get; set; }
     public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
+}
+
+public sealed class AuditLogEntry
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public Guid TenantId { get; set; }
+    public required string Action { get; set; }
+    public required string Actor { get; set; }
+    public string? MetadataJson { get; set; }
+    public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
+}
+
+public sealed class SiemIntegration
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public Guid TenantId { get; set; }
+    public required string WebhookUrl { get; set; }
+    public string? SharedSecret { get; set; }
+    public bool Enabled { get; set; } = true;
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public sealed class SsoSamlConfiguration
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public Guid TenantId { get; set; }
+    public required string EntityId { get; set; }
+    public required string MetadataUrl { get; set; }
+    public bool EnforceSso { get; set; }
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
 public sealed class ApiClient

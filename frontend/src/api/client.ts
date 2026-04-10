@@ -23,7 +23,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const apiClient = {
   pricing: () => request<PricingRow[]>('/api/public/pricing'),
   dashboard: () => request<Dashboard>('/api/dashboard'),
-  checkout: (planType: number) => request<{ checkoutReference: string; amountUsd: number }>('/api/billing/checkout', {
+  checkout: (planType: number) => request<{ checkoutReference: string; amountUsd: number; checkoutUrl: string }>('/api/billing/checkout', {
     method: 'POST',
     body: JSON.stringify({ planType })
   })

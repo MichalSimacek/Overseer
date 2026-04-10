@@ -12,8 +12,10 @@ builder.Services.AddDbContext<OverseerDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddScoped<IEmailAlertService, EmailAlertService>();
+builder.Services.AddScoped<IAuditLogService, AuditLogService>();
 builder.Services.AddSingleton<IPricingService, PricingService>();
-builder.Services.AddSingleton<IPaymentService, MockPaymentService>();
+builder.Services.AddSingleton<IPaymentService, StripePaymentService>();
+builder.Services.AddHttpClient<ISiemWebhookService, SiemWebhookService>();
 builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 builder.Services.AddCors(options =>
 {
@@ -49,7 +51,7 @@ app.MapGet("/api/public/pricing", (IPricingService pricingService) =>
         Features = plan switch
         {
             PlanType.Trial => new[] { "14-day trial", "5 servers", "email alerts", "basic dashboard" },
-            PlanType.Subscription => new[] { "50 servers", "SIEM webhook ingest", "license tracking", "SLA reports" },
+            PlanType.Subscription => new[] { "20 servers", "SIEM webhook ingest", "license tracking", "SLA reports" },
             _ => new[] { "unlimited servers", "SSO/SAML", "priority support", "custom compliance exports" }
         }
     });
@@ -115,6 +117,41 @@ api.MapGet("/dashboard", async (HttpContext httpContext, OverseerDbContext dbCon
     });
 });
 
+api.MapGet("/reports/sla", async (HttpContext httpContext, OverseerDbContext dbContext, int days, CancellationToken cancellationToken) =>
+{
+    var tenantId = httpContext.GetTenantId();
+    var normalizedDays = days is > 0 and <= 90 ? days : 30;
+    var fromUtc = DateTime.UtcNow.AddDays(-normalizedDays);
+    var serverIds = await dbContext.ServerNodes.Where(x => x.TenantId == tenantId).Select(x => x.Id).ToListAsync(cancellationToken);
+
+    var checks = await dbContext.AvailabilityChecks
+        .Where(x => serverIds.Contains(x.ServerNodeId) && x.CheckedAtUtc >= fromUtc)
+        .ToListAsync(cancellationToken);
+
+    var total = checks.Count;
+    var up = checks.Count(x => x.IsUp);
+    var uptimePercent = total == 0 ? 100 : Math.Round((double)up / total * 100, 2);
+
+    return Results.Ok(new
+    {
+        PeriodDays = normalizedDays,
+        TotalChecks = total,
+        HealthyChecks = up,
+        UptimePercent = uptimePercent
+    });
+});
+
+api.MapGet("/audit-logs", async (HttpContext httpContext, OverseerDbContext dbContext, int take, CancellationToken cancellationToken) =>
+{
+    var tenantId = httpContext.GetTenantId();
+    var limit = take is > 0 and <= 200 ? take : 50;
+    var data = await dbContext.AuditLogEntries.Where(x => x.TenantId == tenantId)
+        .OrderByDescending(x => x.CreatedAtUtc)
+        .Take(limit)
+        .ToListAsync(cancellationToken);
+    return Results.Ok(data);
+});
+
 api.MapPost("/servers", async (HttpContext httpContext, CreateServerNodeRequest request, IValidator<CreateServerNodeRequest> validator, OverseerDbContext dbContext, CancellationToken cancellationToken) =>
 {
     var validation = await validator.ValidateAsync(request, cancellationToken);
@@ -123,9 +160,18 @@ api.MapPost("/servers", async (HttpContext httpContext, CreateServerNodeRequest 
         return Results.ValidationProblem(validation.ToDictionary());
     }
 
+    var tenantId = httpContext.GetTenantId();
+    var tenant = await dbContext.Tenants.FirstAsync(x => x.Id == tenantId, cancellationToken);
+    var currentServers = await dbContext.ServerNodes.CountAsync(x => x.TenantId == tenantId, cancellationToken);
+    var limit = GetServerLimit(tenant);
+    if (currentServers >= limit)
+    {
+        return Results.BadRequest(new { error = $"Server limit reached for current plan ({limit})." });
+    }
+
     var node = new ServerNode
     {
-        TenantId = httpContext.GetTenantId(),
+        TenantId = tenantId,
         Name = request.Name,
         Hostname = request.Hostname,
         Port = request.Port
@@ -137,7 +183,7 @@ api.MapPost("/servers", async (HttpContext httpContext, CreateServerNodeRequest 
     return Results.Created($"/api/servers/{node.Id}", node);
 });
 
-api.MapPost("/security-events", async (HttpContext httpContext, CreateSecurityEventRequest request, IValidator<CreateSecurityEventRequest> validator, OverseerDbContext dbContext, IEmailAlertService emailAlertService, CancellationToken cancellationToken) =>
+api.MapPost("/security-events", async (HttpContext httpContext, CreateSecurityEventRequest request, IValidator<CreateSecurityEventRequest> validator, OverseerDbContext dbContext, IEmailAlertService emailAlertService, IAuditLogService auditLogService, ISiemWebhookService siemWebhookService, CancellationToken cancellationToken) =>
 {
     var validation = await validator.ValidateAsync(request, cancellationToken);
     if (!validation.IsValid)
@@ -163,10 +209,18 @@ api.MapPost("/security-events", async (HttpContext httpContext, CreateSecurityEv
     }
 
     await dbContext.SaveChangesAsync(cancellationToken);
+
+    var siem = await dbContext.SiemIntegrations.FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Enabled, cancellationToken);
+    if (siem is not null)
+    {
+        await siemWebhookService.ForwardSecurityEventAsync(siem, item, cancellationToken);
+    }
+
+    await auditLogService.WriteAsync(tenantId, "security_event_created", "api_key", new { item.Id, item.Severity }, cancellationToken);
     return Results.Created($"/api/security-events/{item.Id}", item);
 });
 
-api.MapPost("/availability-checks", async (HttpContext httpContext, CreateAvailabilityCheckRequest request, IValidator<CreateAvailabilityCheckRequest> validator, OverseerDbContext dbContext, IEmailAlertService emailAlertService, CancellationToken cancellationToken) =>
+api.MapPost("/availability-checks", async (HttpContext httpContext, CreateAvailabilityCheckRequest request, IValidator<CreateAvailabilityCheckRequest> validator, OverseerDbContext dbContext, IEmailAlertService emailAlertService, IAuditLogService auditLogService, CancellationToken cancellationToken) =>
 {
     var validation = await validator.ValidateAsync(request, cancellationToken);
     if (!validation.IsValid)
@@ -202,10 +256,11 @@ api.MapPost("/availability-checks", async (HttpContext httpContext, CreateAvaila
     }
 
     await dbContext.SaveChangesAsync(cancellationToken);
+    await auditLogService.WriteAsync(tenantId, "availability_check_created", "api_key", new { check.Id, check.IsUp }, cancellationToken);
     return Results.Created($"/api/availability-checks/{check.Id}", check);
 });
 
-api.MapPost("/license-compliance", async (HttpContext httpContext, UpsertLicenseComplianceRequest request, IValidator<UpsertLicenseComplianceRequest> validator, OverseerDbContext dbContext, IEmailAlertService emailAlertService, CancellationToken cancellationToken) =>
+api.MapPost("/license-compliance", async (HttpContext httpContext, UpsertLicenseComplianceRequest request, IValidator<UpsertLicenseComplianceRequest> validator, OverseerDbContext dbContext, IEmailAlertService emailAlertService, IAuditLogService auditLogService, CancellationToken cancellationToken) =>
 {
     var validation = await validator.ValidateAsync(request, cancellationToken);
     if (!validation.IsValid)
@@ -235,10 +290,11 @@ api.MapPost("/license-compliance", async (HttpContext httpContext, UpsertLicense
     }
 
     await dbContext.SaveChangesAsync(cancellationToken);
+    await auditLogService.WriteAsync(tenantId, "license_compliance_updated", "api_key", new { record.Id }, cancellationToken);
     return Results.Ok(record);
 });
 
-api.MapPost("/alerts", async (HttpContext httpContext, CreateAlertRuleRequest request, IValidator<CreateAlertRuleRequest> validator, OverseerDbContext dbContext, CancellationToken cancellationToken) =>
+api.MapPost("/alerts", async (HttpContext httpContext, CreateAlertRuleRequest request, IValidator<CreateAlertRuleRequest> validator, OverseerDbContext dbContext, IAuditLogService auditLogService, CancellationToken cancellationToken) =>
 {
     var validation = await validator.ValidateAsync(request, cancellationToken);
     if (!validation.IsValid)
@@ -255,11 +311,80 @@ api.MapPost("/alerts", async (HttpContext httpContext, CreateAlertRuleRequest re
 
     dbContext.AlertRules.Add(alert);
     await dbContext.SaveChangesAsync(cancellationToken);
+    await auditLogService.WriteAsync(alert.TenantId, "alert_rule_created", "api_key", new { alert.Id, alert.AlertType }, cancellationToken);
 
     return Results.Created($"/api/alerts/{alert.Id}", alert);
 });
 
-api.MapPost("/billing/checkout", async (HttpContext httpContext, CheckoutRequest request, IValidator<CheckoutRequest> validator, OverseerDbContext dbContext, IPricingService pricingService, IPaymentService paymentService, CancellationToken cancellationToken) =>
+api.MapPut("/integrations/siem", async (HttpContext httpContext, UpsertSiemIntegrationRequest request, IValidator<UpsertSiemIntegrationRequest> validator, OverseerDbContext dbContext, IAuditLogService auditLogService, CancellationToken cancellationToken) =>
+{
+    var validation = await validator.ValidateAsync(request, cancellationToken);
+    if (!validation.IsValid)
+    {
+        return Results.ValidationProblem(validation.ToDictionary());
+    }
+
+    var tenantId = httpContext.GetTenantId();
+    var integration = await dbContext.SiemIntegrations.FirstOrDefaultAsync(x => x.TenantId == tenantId, cancellationToken);
+    if (integration is null)
+    {
+        integration = new SiemIntegration
+        {
+            TenantId = tenantId,
+            WebhookUrl = request.WebhookUrl,
+            SharedSecret = request.SharedSecret,
+            Enabled = request.Enabled
+        };
+        dbContext.SiemIntegrations.Add(integration);
+    }
+    else
+    {
+        integration.WebhookUrl = request.WebhookUrl;
+        integration.SharedSecret = request.SharedSecret;
+        integration.Enabled = request.Enabled;
+        integration.UpdatedAtUtc = DateTime.UtcNow;
+    }
+
+    await dbContext.SaveChangesAsync(cancellationToken);
+    await auditLogService.WriteAsync(tenantId, "siem_integration_upserted", "api_key", new { integration.Enabled }, cancellationToken);
+    return Results.Ok(integration);
+});
+
+api.MapPut("/identity/sso-saml", async (HttpContext httpContext, UpsertSsoSamlRequest request, IValidator<UpsertSsoSamlRequest> validator, OverseerDbContext dbContext, IAuditLogService auditLogService, CancellationToken cancellationToken) =>
+{
+    var validation = await validator.ValidateAsync(request, cancellationToken);
+    if (!validation.IsValid)
+    {
+        return Results.ValidationProblem(validation.ToDictionary());
+    }
+
+    var tenantId = httpContext.GetTenantId();
+    var ssoConfig = await dbContext.SsoSamlConfigurations.FirstOrDefaultAsync(x => x.TenantId == tenantId, cancellationToken);
+    if (ssoConfig is null)
+    {
+        ssoConfig = new SsoSamlConfiguration
+        {
+            TenantId = tenantId,
+            EntityId = request.EntityId,
+            MetadataUrl = request.MetadataUrl,
+            EnforceSso = request.EnforceSso
+        };
+        dbContext.SsoSamlConfigurations.Add(ssoConfig);
+    }
+    else
+    {
+        ssoConfig.EntityId = request.EntityId;
+        ssoConfig.MetadataUrl = request.MetadataUrl;
+        ssoConfig.EnforceSso = request.EnforceSso;
+        ssoConfig.UpdatedAtUtc = DateTime.UtcNow;
+    }
+
+    await dbContext.SaveChangesAsync(cancellationToken);
+    await auditLogService.WriteAsync(tenantId, "sso_saml_updated", "api_key", new { ssoConfig.EnforceSso }, cancellationToken);
+    return Results.Ok(ssoConfig);
+});
+
+api.MapPost("/billing/checkout", async (HttpContext httpContext, CheckoutRequest request, IValidator<CheckoutRequest> validator, OverseerDbContext dbContext, IPricingService pricingService, IPaymentService paymentService, IAuditLogService auditLogService, CancellationToken cancellationToken) =>
 {
     var validation = await validator.ValidateAsync(request, cancellationToken);
     if (!validation.IsValid)
@@ -269,15 +394,15 @@ api.MapPost("/billing/checkout", async (HttpContext httpContext, CheckoutRequest
 
     var tenantId = httpContext.GetTenantId();
     var amount = pricingService.GetPrice(request.PlanType);
-    var reference = await paymentService.CreatePaymentIntentAsync(tenantId, request.PlanType, amount, cancellationToken);
+    var checkout = await paymentService.CreateCheckoutAsync(tenantId, request.PlanType, amount, cancellationToken);
 
     var order = new SubscriptionOrder
     {
         TenantId = tenantId,
         RequestedPlan = request.PlanType,
         AmountUsd = amount,
-        PaymentProvider = "Mock",
-        ProviderReference = reference
+        PaymentProvider = "Stripe",
+        ProviderReference = checkout.ProviderReference
     };
 
     dbContext.SubscriptionOrders.Add(order);
@@ -285,10 +410,17 @@ api.MapPost("/billing/checkout", async (HttpContext httpContext, CheckoutRequest
     var tenant = await dbContext.Tenants.FirstAsync(x => x.Id == tenantId, cancellationToken);
     tenant.PlanType = request.PlanType;
     tenant.TrialEndsAtUtc = null;
+    tenant.ServerLimitOverride = request.PlanType switch
+    {
+        PlanType.Trial => 5,
+        PlanType.Subscription => 20,
+        _ => 0
+    };
 
     await dbContext.SaveChangesAsync(cancellationToken);
+    await auditLogService.WriteAsync(tenantId, "billing_checkout_created", "api_key", new { order.Id, request.PlanType }, cancellationToken);
 
-    return Results.Ok(new { order.Id, order.AmountUsd, CheckoutReference = order.ProviderReference });
+    return Results.Ok(new { order.Id, order.AmountUsd, CheckoutReference = order.ProviderReference, checkout.CheckoutUrl });
 });
 
 await app.RunAsync();
@@ -358,6 +490,26 @@ internal sealed class CreateAlertRuleRequestValidator : AbstractValidator<Create
     }
 }
 
+internal sealed record UpsertSiemIntegrationRequest(string WebhookUrl, string? SharedSecret, bool Enabled);
+internal sealed class UpsertSiemIntegrationRequestValidator : AbstractValidator<UpsertSiemIntegrationRequest>
+{
+    public UpsertSiemIntegrationRequestValidator()
+    {
+        RuleFor(x => x.WebhookUrl).NotEmpty().Must(x => Uri.TryCreate(x, UriKind.Absolute, out _)).WithMessage("WebhookUrl must be a valid absolute URL.");
+        RuleFor(x => x.SharedSecret).MaximumLength(200);
+    }
+}
+
+internal sealed record UpsertSsoSamlRequest(string EntityId, string MetadataUrl, bool EnforceSso);
+internal sealed class UpsertSsoSamlRequestValidator : AbstractValidator<UpsertSsoSamlRequest>
+{
+    public UpsertSsoSamlRequestValidator()
+    {
+        RuleFor(x => x.EntityId).NotEmpty().MaximumLength(300);
+        RuleFor(x => x.MetadataUrl).NotEmpty().Must(x => Uri.TryCreate(x, UriKind.Absolute, out _)).WithMessage("MetadataUrl must be a valid absolute URL.");
+    }
+}
+
 internal sealed record CheckoutRequest(PlanType PlanType);
 internal sealed class CheckoutRequestValidator : AbstractValidator<CheckoutRequest>
 {
@@ -378,4 +530,19 @@ internal static class HttpContextExtensions
 
         throw new InvalidOperationException("Missing tenant context.");
     }
+}
+
+static int GetServerLimit(Tenant tenant)
+{
+    if (tenant.ServerLimitOverride > 0)
+    {
+        return tenant.ServerLimitOverride;
+    }
+
+    return tenant.PlanType switch
+    {
+        PlanType.Trial => 5,
+        PlanType.Subscription => 20,
+        _ => int.MaxValue
+    };
 }

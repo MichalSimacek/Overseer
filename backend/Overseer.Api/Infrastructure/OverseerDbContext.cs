@@ -13,6 +13,9 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<AlertRule> AlertRules => Set<AlertRule>();
     public DbSet<SubscriptionOrder> SubscriptionOrders => Set<SubscriptionOrder>();
     public DbSet<ApiClient> ApiClients => Set<ApiClient>();
+    public DbSet<AuditLogEntry> AuditLogEntries => Set<AuditLogEntry>();
+    public DbSet<SiemIntegration> SiemIntegrations => Set<SiemIntegration>();
+    public DbSet<SsoSamlConfiguration> SsoSamlConfigurations => Set<SsoSamlConfiguration>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -21,5 +24,8 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
         modelBuilder.Entity<AlertRule>().HasIndex(x => new { x.TenantId, x.AlertType, x.TargetEmail }).IsUnique();
         modelBuilder.Entity<ApiClient>().HasIndex(x => x.ApiKeyHash).IsUnique();
         modelBuilder.Entity<SubscriptionOrder>().Property(x => x.AmountUsd).HasPrecision(10, 2);
+        modelBuilder.Entity<SiemIntegration>().HasIndex(x => x.TenantId).IsUnique();
+        modelBuilder.Entity<SsoSamlConfiguration>().HasIndex(x => x.TenantId).IsUnique();
+        modelBuilder.Entity<AuditLogEntry>().HasIndex(x => new { x.TenantId, x.CreatedAtUtc });
     }
 }

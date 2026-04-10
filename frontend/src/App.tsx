@@ -33,7 +33,7 @@ export function App(): JSX.Element {
 
     try {
       const result = await apiClient.checkout(planType);
-      setCheckoutMessage(`Objednávka vytvořena (${result.checkoutReference}), částka $${result.amountUsd}/měsíc.`);
+      setCheckoutMessage(`Objednávka vytvořena (${result.checkoutReference}), částka $${result.amountUsd}/měsíc. Otevři Stripe checkout: ${result.checkoutUrl}`);
     } catch {
       setCheckoutMessage('Checkout selhal. Ověřte API klíč nebo backend.');
     }
@@ -79,7 +79,7 @@ export function App(): JSX.Element {
           <li>SLA reporting a trendy latence.</li>
           <li>Audit log pro všechny změny alertů a licenčních záznamů.</li>
           <li>Bezpečnostní webhook endpointy pro SIEM integrace.</li>
-          <li>Připraveno pro SSO/SAML v Enterprise tarifu.</li>
+          <li>Konfigurovatelné SSO/SAML v Enterprise tarifu.</li>
         </ul>
       </section>
 

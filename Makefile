@@ -14,7 +14,7 @@ backend-build:
 	dotnet build backend/Overseer.Api/Overseer.Api.csproj
 
 frontend-install:
-	npm ci --prefix frontend
+	npm install --prefix frontend
 
 frontend-build: frontend-install
 	npm run build --prefix frontend

@@ -1,31 +1,31 @@
-# Architekturální přehled
+# Architecture
 
-## Backend
-- `Program.cs`: API endpointy, registrace služeb, CORS, validace a middleware pipeline.
-- `Domain/Entities.cs`: doménové entity + plánové modely.
-- `Infrastructure/OverseerDbContext.cs`: datový model + indexy.
-- `Common/`: middleware a služby (API key, e-mail, pricing, payment).
+## Backend (ASP.NET 9 Minimal API)
+- API key middleware pro tenant scope.
+- EF Core + PostgreSQL (`OverseerDbContext`).
+- FluentValidation pro vstupy.
+- Stripe checkout (`StripePaymentService`).
+- Audit log service + SIEM webhook service.
+
+## Klíčové endpointy
+- Onboarding: `POST /api/tenants`
+- Servery: `POST /api/servers`
+- Dostupnost: `POST /api/availability-checks`
+- Security eventy: `POST /api/security-events`
+- Licence: `POST /api/license-compliance`
+- Alert rules: `POST /api/alerts`
+- SIEM: `PUT /api/integrations/siem`
+- SSO/SAML: `PUT /api/identity/sso-saml`
+- SLA report: `GET /api/reports/sla?days=30`
+- Audit log: `GET /api/audit-logs`
+- Billing: `POST /api/billing/checkout`
+- Public pricing: `GET /api/public/pricing`
 
 ## Frontend
-- Jednoduchý dashboard + pricing + checkout call.
-- Důraz na čistotu, minimum komplexity, snadné rozšíření.
+- React + TypeScript + Vite.
+- Jedna jednoduchá dashboard stránka, pricing + checkout flow.
 
-## Data model
-- `Tenant` reprezentuje zákazníka/plán.
-- `ApiClient` drží hash API klíče.
-- `ServerNode`, `AvailabilityCheck`, `SecurityEvent`, `LicenseComplianceRecord`, `AlertRule`.
-- `SubscriptionOrder` drží billing audit.
-
-## API capabilities (MVP)
-- Tenant onboarding (`/api/tenants`).
-- Monitoring dostupnosti (`/api/availability-checks`).
-- Security incident ingest (`/api/security-events`).
-- License compliance ingest (`/api/license-compliance`).
-- Alert rules (`/api/alerts`).
-- Dashboard (`/api/dashboard`).
-- Pricing + checkout (`/api/public/pricing`, `/api/billing/checkout`).
-
-## Multi-tenant bezpečnost
-- Tenant kontext je odvozený z API klíče.
-- Každý endpoint pracuje jen s daty tenant scope.
-- API key je ukládán pouze hashovaný (BCrypt).
+## Bezpečnost
+- API klíče hashované přes BCrypt.
+- Tenant data izolace na úrovni endpointů.
+- CORS omezený na lokální frontend origin.
